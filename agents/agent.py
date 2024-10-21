@@ -7,73 +7,59 @@ def min_max_restriction(v, min_v, max_v):
     return max(min(v, max_v), min_v)
 
 
-class Agent:
-    def __init__(self, name):
-        self.name = name
-        self.exploration_rate = 0.1
-        self.health = 100
-        self.target = (0.0, 0.0)
-        self.model = None
+class QLearningAgent:
+    def __init__(
+        self,
+        action_space,
+        state_space,
+        alpha=0.1,
+        gamma=0.99,
+        epsilon=1.0,
+        epsilon_decay=0.995,
+        epsilon_min=0.01,
+    ):
+        # Q-table initialization
+        self.state_space_size = state_space
+        self.action_space = action_space
+
+        self.q_table = np.zeros(state_space + (action_space.n,))
+        self.alpha = alpha  # Learning rate
+        self.gamma = gamma  # Discount factor
+        self.epsilon = epsilon  # Exploration rate
+        self.epsilon_decay = epsilon_decay  # Decay rate for exploration
+        self.epsilon_min = epsilon_min  # Minimum epsilon
+
+    def discretize_state(self, observation, bins):
+        # Discretize continuous state space into buckets (needed for environments like CartPole)
+        lower_bounds = [-10, -10]  # Lower bounds of the state space
+        upper_bounds = [10, 10]  # Upper bounds of the state space
+
+        ratios = [observation[i] for i in range(len(observation))]
+        # print(observation, ratios)
+        new_state = [
+            int(np.digitize(ratios[i], bins=bins[i])) for i in range(len(observation))
+        ]
+        return tuple(new_state)
 
     def choose_action(self, state):
-        raise NotImplementedError
-
-    def learn(self, state, action, reward, next_state, done):
-        raise NotImplementedError
-
-    def reset(self):
-        self.health = 100
-
-
-class AgentAttack(Agent):
-
-    def choose_action(self, state):
-        features = sum([list(state), list(self.target), [1]], [])
-        mu_x, std_x, mu_y, std_y, speed = self.model.predict([features])[0]
-        mu_x, std_x, mu_y, std_y, speed = (
-            min_max_restriction(round(mu_x, 3), -0.1, 0.1),
-            min_max_restriction(round(std_x, 3), -0.1, 0.1),
-            min_max_restriction(round(mu_y, 3), -0.1, 0.1),
-            min_max_restriction(round(std_y, 3), -0.1, 0.1),
-            min_max_restriction(round(speed, 3), -0.1, 0.1),
-        )
-
-        if random.uniform(0, 1) < self.exploration_rate:
-            step_x = np.random.normal(0.0, 0.5)
-            step_y = np.random.normal(0.0, 0.5)
+        # Epsilon-greedy policy for action selection
+        if random.uniform(0, 1) < self.epsilon:
+            return random.choice(
+                [i for i in range(self.action_space.n)]
+            )  # Exploration: Random action
         else:
-            step_x = np.random.normal(mu_x, max(0.001, std_x))
-            step_y = np.random.normal(mu_y, max(0.001, std_y))
+            return np.argmax(
+                self.q_table[state]
+            )  # Exploitation: Choose the best action
 
-        next_x = state[0] + step_x * speed
-        next_y = state[1] + step_y * speed
+    def update_q_value(self, state, action, reward, next_state):
+        # Q-learning formula to update the Q-table
+        best_next_action = np.argmax(self.q_table[next_state])
+        td_target = reward + self.gamma * self.q_table[next_state][best_next_action]
+        td_delta = td_target - self.q_table[state][action]
+        self.q_table[state][action] += self.alpha * td_delta
 
-        return next_x, next_y, (mu_x, std_x, mu_y, std_y, speed)
-
-    def warmup_model(self):
-        # do warmup
-        X = np.random.rand(300, 5)  # x, y, tx, ty, reward
-        y = np.random.rand(300, 5)  # mu_x, std_x, mu_y, std_y, speed
-        self.model = LinearRegression().fit(X, y)
-
-    def learn(self, state, action, reward, next_state, done):
-        X = [sum([list(state), list(self.target), [reward]], [])]
-        y = [list(action)]
-        self.model.fit(X, y)
-
-
-class AgentDefend(Agent):
-
-    def choose_action(self, state):
-        x1, y1, x2, y2, target = state
-        x2, y2 = target
-
-        if random.uniform(0, 1) < self.exploration_rate:
-            d = (np.random.choice([1, -1]), np.random.choice([1, -1]))
-        else:
-            d = (1.0 if (x2 - x1) > 0 else -1.0, 1.0 if (y2 - y1) > 0 else -1.0)
-
-        next_x = x1 + self.speed * d[0]
-        next_y = y1 + self.speed * d[1]
-
-        return next_x, next_y
+    def decay_epsilon(self):
+        # Gradually decrease epsilon to reduce exploration over time
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
